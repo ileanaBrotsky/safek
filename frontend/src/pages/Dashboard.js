@@ -1,12 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import useAuthStore from '../store/useAuthStore';
 import ChildrenManager from '../components/ChildrenManager';
-import { childrenService, alertsService, safeZonesService, monitoringService } from '../services/api';
+import { childrenService, alertsService, safeZonesService } from '../services/api';
+import NotificationSystem from '../components/common/NotificationSystem';
+import InteractiveMap from '../components/InteractiveMap';
 
 const Dashboard = () => {
   const { family, logout } = useAuthStore();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [loading, setLoading] = useState(true);
+  
+  // Estado centralizado - una sola fuente de verdad
+  const [allChildren, setAllChildren] = useState([]);
+  const [allAlerts, setAllAlerts] = useState([]);
+  const [allSafeZones, setAllSafeZones] = useState([]);
+  
   const [dashboardData, setDashboardData] = useState({
     children: [],
     alerts: [],
@@ -19,33 +27,54 @@ const Dashboard = () => {
     }
   });
 
-  useEffect(() => {
-    loadDashboardData();
-    // Actualizar cada 30 segundos
-    const interval = setInterval(loadDashboardData, 30000);
-    return () => clearInterval(interval);
+  // Función para actualizar children desde ChildrenManager
+  const updateChildren = useCallback((newChildren) => {
+    setAllChildren(newChildren);
+    
+    // Actualizar dashboardData con los nuevos children
+    setDashboardData(prev => ({
+      ...prev,
+      children: newChildren,
+      metrics: {
+        ...prev.metrics,
+        activeChildren: newChildren.filter(c => c.is_active).length
+      }
+    }));
   }, []);
 
-  const loadDashboardData = async () => {
-    try {
-      console.log('🔄 Cargando datos del dashboard...');
+  // Cargar datos iniciales una sola vez
+  useEffect(() => {
+    loadInitialData();
+  }, []);
 
-      // Cargar datos en paralelo
+  const loadInitialData = async () => {
+    try {
+      console.log('🔄 Cargando datos iniciales del dashboard...');
+
       const [childrenRes, alertsRes, safeZonesRes] = await Promise.all([
         childrenService.getAll().catch(e => ({ children: [] })),
         alertsService.getAll({ limit: 10 }).catch(e => ({ alerts: [] })),
         safeZonesService.getAll().catch(e => ({ safeZones: [] }))
       ]);
 
+      const childrenData = childrenRes.data?.children || childrenRes.children || [];
+      const alertsData = alertsRes.data?.alerts || alertsRes.alerts || [];
+      const safeZonesData = safeZonesRes.data?.safe_zones || safeZonesRes.safeZones || [];
+
+      // Actualizar todos los estados
+      setAllChildren(childrenData);
+      setAllAlerts(alertsData);
+      setAllSafeZones(safeZonesData);
+
       const data = {
-        children: childrenRes.children || [],
-        alerts: alertsRes.alerts || [],
-        safeZones: safeZonesRes.safeZones || [],
+        children: childrenData,
+        alerts: alertsData,
+        safeZones: safeZonesData,
         metrics: {
-          activeChildren: (childrenRes.children || []).filter(c => c.is_active).length,
-          todayAlerts: (alertsRes.alerts || []).length,
-          unreadAlerts: (alertsRes.alerts || []).filter(a => !a.is_read).length,
-          locationsToday: Math.floor(Math.random() * 50) // Simulado
+          activeChildren: childrenData.filter(c => c.is_active).length,
+          todayAlerts: alertsData.length,
+          unreadAlerts: alertsData.filter(a => !a.is_read).length,
+          locationsToday: Math.floor(Math.random() * 50)
         }
       };
 
@@ -61,6 +90,12 @@ const Dashboard = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Función para refrescar datos manualmente
+  const refreshDashboard = async () => {
+    setLoading(true);
+    await loadInitialData();
   };
 
   const getRiskColor = (level) => {
@@ -84,6 +119,21 @@ const Dashboard = () => {
 
   const DashboardView = () => (
     <div className="space-y-6">
+      {/* Header con botón de actualización */}
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-gray-900">Panel Principal</h2>
+        <button
+          onClick={refreshDashboard}
+          disabled={loading}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2 disabled:opacity-50"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <span>{loading ? 'Actualizando...' : 'Actualizar'}</span>
+        </button>
+      </div>
+
       {/* Métricas principales */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-gradient-to-r from-blue-500 to-blue-600 p-6 rounded-xl shadow-lg text-white">
@@ -153,7 +203,10 @@ const Dashboard = () => {
               </svg>
               Estado de los Niños
             </h3>
-            <button className="text-blue-600 hover:text-blue-800 text-sm font-medium">
+            <button 
+              onClick={() => setActiveTab('children')}
+              className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+            >
               Ver todos
             </button>
           </div>
@@ -166,7 +219,7 @@ const Dashboard = () => {
                     <div className={`w-4 h-4 rounded-full ${child.is_active ? 'bg-green-400' : 'bg-gray-400'}`}></div>
                     <div>
                       <p className="font-semibold text-gray-900">{child.name}</p>
-                      <p className="text-sm text-gray-600">{child.age} años • Límite: {child.max_screen_time}min</p>
+                      <p className="text-sm text-gray-600">{child.age} años • Límite: {child.max_screen_time || 180}min</p>
                     </div>
                   </div>
                   <div className="text-right">
@@ -189,7 +242,10 @@ const Dashboard = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M34 40h10v-4a6 6 0 00-10.712-3.714M34 40H14m20 0v-4M14 40H4v-4a6 6 0 0110.712-3.714M14 40v-4m0 0a4 4 0 118 0v4m-8-4V20a8 8 0 1116 0v16" />
                 </svg>
                 <p className="mt-2 text-gray-500 font-medium">No hay niños registrados</p>
-                <button className="mt-2 text-blue-600 hover:text-blue-800 text-sm">
+                <button 
+                  onClick={() => setActiveTab('children')}
+                  className="mt-2 text-blue-600 hover:text-blue-800 text-sm"
+                >
                   Registrar primer niño
                 </button>
               </div>
@@ -238,7 +294,7 @@ const Dashboard = () => {
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
                 <p className="mt-2 text-gray-500 font-medium">No hay alertas</p>
-                <p className="text-green-600 text-sm">¡Todo está funcionando correctamente! 😊</p>
+                <p className="text-green-600 text-sm">¡Todo está funcionando correctamente!</p>
               </div>
             )}
           </div>
@@ -285,28 +341,21 @@ const Dashboard = () => {
   );
 
   const LocationView = () => (
-    <div className="bg-white p-8 rounded-xl shadow-lg">
-      <div className="text-center">
-        <svg className="mx-auto h-16 w-16 text-blue-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 48 48">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 000 2.828l4.243 4.243a1.998 1.998 0 002.828 0L24.728 23.728M21 12a9 9 0 019 9m-9-9a9 9 0 00-9 9m9-9v2.25" />
-        </svg>
-        <h3 className="text-2xl font-bold text-gray-900 mb-2">Mapa de Ubicaciones</h3>
-        <p className="text-gray-600 mb-4">Seguimiento en tiempo real de todos los niños registrados</p>
-        <div className="bg-blue-50 p-6 rounded-lg">
-          <p className="text-blue-800 font-medium">🗺️ Próximamente: Mapa interactivo con Google Maps</p>
-          <p className="text-blue-600 text-sm mt-2">Aquí se mostrará la ubicación en tiempo real de cada niño</p>
-        </div>
-      </div>
-    </div>
+    <InteractiveMap 
+      children={allChildren} 
+      safeZones={allSafeZones} 
+    />
   );
+
+  // ARQUITECTURA CORREGIDA: Pasar datos como props y función de actualización
   const ChildrenView = () => (
-    <ChildrenManager onChildrenUpdate={(children) => {
-      setDashboardData(prev => ({
-        ...prev,
-        children: children
-      }));
-    }} />
+    <ChildrenManager 
+      children={allChildren}
+      safeZones={allSafeZones}
+      onChildrenChange={updateChildren}
+    />
   );
+
   const MonitoringView = () => (
     <div className="bg-white p-8 rounded-xl shadow-lg">
       <div className="text-center">
@@ -316,7 +365,7 @@ const Dashboard = () => {
         <h3 className="text-2xl font-bold text-gray-900 mb-2">Panel de Monitoreo Avanzado</h3>
         <p className="text-gray-600 mb-4">Análisis detallado del comportamiento y uso de dispositivos</p>
         <div className="bg-purple-50 p-6 rounded-lg">
-          <p className="text-purple-800 font-medium">📊 Próximamente: Gráficos y estadísticas detalladas</p>
+          <p className="text-purple-800 font-medium">Próximamente: Gráficos y estadísticas detalladas</p>
           <p className="text-purple-600 text-sm mt-2">Tiempo de pantalla, análisis de riesgo, patrones de comportamiento</p>
         </div>
       </div>
@@ -333,7 +382,7 @@ const Dashboard = () => {
         <h3 className="text-2xl font-bold text-gray-900 mb-2">Configuración del Sistema</h3>
         <p className="text-gray-600 mb-4">Personaliza los límites, notificaciones y zonas seguras</p>
         <div className="bg-gray-50 p-6 rounded-lg">
-          <p className="text-gray-800 font-medium">⚙️ Próximamente: Panel de configuración completo</p>
+          <p className="text-gray-800 font-medium">Próximamente: Panel de configuración completo</p>
           <p className="text-gray-600 text-sm mt-2">Límites de tiempo, filtros de contenido, configuración de alertas</p>
         </div>
       </div>
@@ -489,6 +538,7 @@ const Dashboard = () => {
           </div>
         </div>
       </footer>
+      <NotificationSystem />
     </div>
   );
 };

@@ -1,0 +1,108 @@
+services:
+  # Base de datos PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    container_name: safekids-postgres
+    environment:
+      POSTGRES_DB: safekids_db
+      POSTGRES_USER: safekids_user
+      POSTGRES_PASSWORD: safekids_password123
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/database/migrations:/docker-entrypoint-initdb.d
+    networks:
+      - safekids-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U safekids_user -d safekids_db && psql -U safekids_user -d safekids_db -c 'SELECT 1'"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # Cache Redis
+  redis:
+    image: redis:7-alpine
+    container_name: safekids-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - safekids-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: safekids-backend
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+       # Variables específicas para PostgreSQL en Docker
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: safekids_db
+      POSTGRES_USER: safekids_user
+      POSTGRES_PASSWORD: safekids_password123
+      DATABASE_URL: postgresql://safekids_user:safekids_password123@postgres:5432/safekids_db
+       # Redis
+      REDIS_URL: redis://redis:6379
+      # JWT
+      JWT_SECRET: safekids_super_secret_jwt_key_2024
+      JWT_EXPIRE: 7d
+      # CORS
+      FRONTEND_URL: http://localhost:3001
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    networks:
+      - safekids-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: npm run dev
+    restart: unless-stopped
+
+  # Frontend React (opcional para desarrollo)
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: safekids-frontend
+  #   environment:
+  #     REACT_APP_API_URL: http://localhost:3000
+  #     REACT_APP_SOCKET_URL: http://localhost:3000
+  #   ports:
+  #     - "3001:3000"
+  #   volumes:
+  #     - ./frontend:/app
+  #     - /app/node_modules
+  #   networks:
+  #     - safekids-network
+  #   depends_on:
+  #     - backend
+  #   command: npm start
+  #   restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  safekids-network:
+    driver: bridge

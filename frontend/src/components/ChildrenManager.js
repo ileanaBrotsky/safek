@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { childrenService, safeZonesService } from '../services/api';
 
-const ChildrenManager = ({ onChildrenUpdate }) => {
-  const [children, setChildren] = useState([]);
-  const [safeZones, setSafeZones] = useState([]);
-  const [loading, setLoading] = useState(true);
+const ChildrenManager = ({ children = [], safeZones = [], onChildrenChange }) => {
+  const [loading, setLoading] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingChild, setEditingChild] = useState(null);
+  const [localSafeZones, setLocalSafeZones] = useState(safeZones);
   const [formData, setFormData] = useState({
     name: '',
     age: '',
@@ -17,28 +16,22 @@ const ChildrenManager = ({ onChildrenUpdate }) => {
     assignedZones: []
   });
 
+  // Solo cargar safe zones si no se pasaron como props
   useEffect(() => {
-    loadData();
-  }, []);
+    if (safeZones.length === 0) {
+      loadSafeZones();
+    } else {
+      setLocalSafeZones(safeZones);
+    }
+  }, [safeZones]);
 
-  const loadData = async () => {
+  const loadSafeZones = async () => {
     try {
-      const [childrenRes, safeZonesRes] = await Promise.all([
-        childrenService.getAll(),
-        safeZonesService.getAll()
-      ]);
-
-      setChildren(childrenRes.children || []);
-      setSafeZones(safeZonesRes.safeZones || []);
-
-      // Notificar al componente padre que se actualizaron los niños
-      if (onChildrenUpdate) {
-        onChildrenUpdate(childrenRes.children || []);
-      }
+      const safeZonesRes = await safeZonesService.getAll();
+      const safeZonesData = safeZonesRes.data?.safe_zones || safeZonesRes.safeZones || [];
+      setLocalSafeZones(safeZonesData);
     } catch (error) {
-      console.error('Error loading data:', error);
-    } finally {
-      setLoading(false);
+      console.error('Error loading safe zones:', error);
     }
   };
 
@@ -51,28 +44,68 @@ const ChildrenManager = ({ onChildrenUpdate }) => {
       const childData = {
         name: formData.name,
         age: parseInt(formData.age),
-        deviceId: formData.deviceId,
-        maxScreenTime: parseInt(formData.maxScreenTime),
-        maxSocialTime: parseInt(formData.maxSocialTime),
-        bedtimeHour: formData.bedtimeHour
+        device_id: formData.deviceId,
+        max_screen_time: parseInt(formData.maxScreenTime),
+        max_social_time: parseInt(formData.maxSocialTime),
+        bedtime_hour: formData.bedtimeHour
       };
+
+      let response;
+      let updatedChildren;
 
       if (editingChild) {
         // Actualizar niño existente
-        await childrenService.update(editingChild.id, childData);
+        response = await childrenService.update(editingChild.id, childData);
+        console.log('Child updated successfully:', response);
+        
+        // Construir datos actualizados del niño
+        const updatedChild = {
+          ...editingChild,
+          ...childData,
+          // Preservar campos que vienen del backend
+          is_active: editingChild.is_active,
+          risk_level: editingChild.risk_level,
+          last_location: editingChild.last_location,
+          created_at: editingChild.created_at,
+          updated_at: new Date().toISOString()
+        };
+
+        // Actualizar en el array de children
+        updatedChildren = children.map(child => 
+          child.id === editingChild.id ? updatedChild : child
+        );
       } else {
         // Crear nuevo niño
-        await childrenService.create(childData);
+        response = await childrenService.create(childData);
+        console.log('Child created successfully:', response);
+        
+        // Extraer datos del nuevo niño desde la respuesta
+        const newChild = response.data?.child || response.child || { 
+          id: Date.now(), // ID temporal en caso de que no venga del servidor
+          ...childData,
+          is_active: true,
+          risk_level: 'low',
+          last_location: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+
+        // Agregar al array de children
+        updatedChildren = [...children, newChild];
       }
 
-      await loadData();
+      // Notificar al Dashboard con los datos actualizados
+      if (onChildrenChange) {
+        onChildrenChange(updatedChildren);
+      }
+
       resetForm();
       setShowAddModal(false);
       setEditingChild(null);
 
     } catch (error) {
       console.error('Error saving child:', error);
-      alert('Error al guardar: ' + (error.response?.data?.error || error.message));
+      alert('Error al guardar: ' + (error.response?.data?.message || error.message));
     } finally {
       setLoading(false);
     }
@@ -84,9 +117,9 @@ const ChildrenManager = ({ onChildrenUpdate }) => {
       name: child.name,
       age: child.age.toString(),
       deviceId: child.device_id,
-      maxScreenTime: child.max_screen_time,
-      maxSocialTime: child.max_social_time,
-      bedtimeHour: child.bedtime_hour,
+      maxScreenTime: child.max_screen_time || 180,
+      maxSocialTime: child.max_social_time || 60,
+      bedtimeHour: child.bedtime_hour || '22:00',
       assignedZones: []
     });
     setShowAddModal(true);
@@ -95,11 +128,23 @@ const ChildrenManager = ({ onChildrenUpdate }) => {
   const handleDelete = async (child) => {
     if (window.confirm(`¿Estás seguro de eliminar a ${child.name}?`)) {
       try {
+        setLoading(true);
         await childrenService.delete(child.id);
-        await loadData();
+        
+        // Eliminar del estado local
+        const updatedChildren = children.filter(c => c.id !== child.id);
+        
+        // Notificar al Dashboard
+        if (onChildrenChange) {
+          onChildrenChange(updatedChildren);
+        }
+        
+        console.log('Child deleted successfully');
       } catch (error) {
         console.error('Error deleting child:', error);
-        alert('Error al eliminar: ' + (error.response?.data?.error || error.message));
+        alert('Error al eliminar: ' + (error.response?.data?.message || error.message));
+      } finally {
+        setLoading(false);
       }
     }
   };
@@ -140,10 +185,12 @@ const ChildrenManager = ({ onChildrenUpdate }) => {
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Gestión de Niños</h2>
           <p className="text-gray-600 mt-1">Administra los perfiles y configuraciones de cada niño</p>
+          <p className="text-sm text-gray-500 mt-1">Total de niños: {children.length}</p>
         </div>
         <button
-        type="button"
+          type="button"
           onClick={() => {
+            console.log('Opening modal...');
             resetForm();
             setEditingChild(null);
             setShowAddModal(true);
@@ -188,17 +235,17 @@ const ChildrenManager = ({ onChildrenUpdate }) => {
 
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600">Tiempo pantalla:</span>
-                  <span className="font-semibold">{child.max_screen_time} min/día</span>
+                  <span className="font-semibold">{child.max_screen_time || 180} min/día</span>
                 </div>
 
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600">Redes sociales:</span>
-                  <span className="font-semibold">{child.max_social_time} min/día</span>
+                  <span className="font-semibold">{child.max_social_time || 60} min/día</span>
                 </div>
 
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600">Hora de descanso:</span>
-                  <span className="font-semibold">{child.bedtime_hour}</span>
+                  <span className="font-semibold">{child.bedtime_hour || '22:00'}</span>
                 </div>
               </div>
 
@@ -223,16 +270,18 @@ const ChildrenManager = ({ onChildrenUpdate }) => {
               {/* Botones de acción */}
               <div className="flex space-x-2">
                 <button
-                type="button"
+                  type="button"
                   onClick={() => handleEdit(child)}
-                  className="flex-1 bg-blue-50 text-blue-700 py-2 px-4 rounded-lg hover:bg-blue-100 transition-colors font-medium text-sm"
+                  disabled={loading}
+                  className="flex-1 bg-blue-50 text-blue-700 py-2 px-4 rounded-lg hover:bg-blue-100 transition-colors font-medium text-sm disabled:opacity-50"
                 >
                   Editar
                 </button>
                 <button
-                type="button"
+                  type="button"
                   onClick={() => handleDelete(child)}
-                  className="flex-1 bg-red-50 text-red-700 py-2 px-4 rounded-lg hover:bg-red-100 transition-colors font-medium text-sm"
+                  disabled={loading}
+                  className="flex-1 bg-red-50 text-red-700 py-2 px-4 rounded-lg hover:bg-red-100 transition-colors font-medium text-sm disabled:opacity-50"
                 >
                   Eliminar
                 </button>
@@ -250,8 +299,9 @@ const ChildrenManager = ({ onChildrenUpdate }) => {
             <h3 className="text-lg font-medium text-gray-900 mb-2">No hay niños registrados</h3>
             <p className="text-gray-600 mb-4">Comienza agregando el primer niño para empezar a monitorear</p>
             <button
-            type="button"
+              type="button"
               onClick={() => {
+                console.log('Opening modal from empty state...');
                 resetForm();
                 setEditingChild(null);
                 setShowAddModal(true);
@@ -266,40 +316,32 @@ const ChildrenManager = ({ onChildrenUpdate }) => {
 
       {/* Modal para Agregar/Editar */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"
-       onClick={(e) => {
-      // Solo cerrar si se hace click en el fondo, no en el modal
-      if (e.target === e.currentTarget) {
-        setShowAddModal(false);
-        setEditingChild(null);
-        resetForm();
-      }
-    }}
-  >
-    <div 
-      className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
-      onClick={(e) => e.stopPropagation()} // Prevenir que el click se propague
-    >
-      <div className="p-6 border-b border-gray-200">
-        <div className="flex justify-between items-center">
-          <h3 className="text-xl font-bold text-gray-900">
-            {editingChild ? 'Editar Niño' : 'Agregar Nuevo Niño'}
-          </h3>
-          <button
-            type="button"
-            onClick={() => {
-              setShowAddModal(false);
-              setEditingChild(null);
-              resetForm();
-            }}
-            className="text-gray-400 hover:text-gray-600 p-2"
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div 
+            className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
           >
-            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-      </div>
+            <div className="p-6 border-b border-gray-200">
+              <div className="flex justify-between items-center">
+                <h3 className="text-xl font-bold text-gray-900">
+                  {editingChild ? 'Editar Niño' : 'Agregar Nuevo Niño'}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    console.log('Closing modal...');
+                    setShowAddModal(false);
+                    setEditingChild(null);
+                    resetForm();
+                  }}
+                  className="text-gray-400 hover:text-gray-600 p-2"
+                >
+                  <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
 
             <form onSubmit={handleSubmit} className="p-6 space-y-6">
               {/* Información Básica */}
@@ -406,6 +448,7 @@ const ChildrenManager = ({ onChildrenUpdate }) => {
                 <button
                   type="button"
                   onClick={() => {
+                    console.log('Cancel button clicked');
                     setShowAddModal(false);
                     setEditingChild(null);
                     resetForm();

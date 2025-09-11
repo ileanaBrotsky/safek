@@ -13,7 +13,14 @@
     "migrate": "node database/migrate.js",
     "seed": "node database/seed.js",
     "db:setup": "npm run migrate && npm run seed",
-    "install-deps": "npm install"
+    "install-deps": "npm install",
+    "docker:init": "node scripts/init-docker.js",
+    "docker:build": "docker-compose build",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f",
+    "docker:restart": "docker-compose restart backend",
+    "docker:clean": "docker-compose down -v && docker system prune -f"
   },
   "keywords": [
     "parental-control",

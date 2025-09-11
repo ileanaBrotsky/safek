@@ -1,7 +1,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';  // ← ESTA LÍNEA FALTABA
+import Dashboard from './pages/Dashboard'; 
 import useAuthStore from './store/useAuthStore';
 
 const ProtectedRoute = ({ children }) => {

@@ -1,95 +1,126 @@
 // backend/src/app.js
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 
+// Importar base de datos y rutas
+const { initDatabase } = require('./models/database');
+
 const app = express();
 
-// Middlewares de seguridad
+// 🛡️ MIDDLEWARES DE SEGURIDAD
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3001',
+  origin: process.env.FRONTEND_URL || ['http://localhost:3001', 'http://localhost:5173'],
   credentials: true
 }));
 
-// Rate limiting
+// 🚦 RATE LIMITING
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 100 // máximo 100 requests por ventana
+  max: 1000, // límite de 100 requests por ventana
+  message: {
+    success: false,
+    message: 'Demasiadas peticiones, intenta de nuevo más tarde'
+  }
 });
-app.use('/api/', limiter);
+// app.use('/api/', limiter);
 
-// Middlewares generales
-app.use(morgan('combined'));
+// 📝 MIDDLEWARES DE PARSING Y LOGGING
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(morgan('combined'));
 
-// Health check
+// 🔗 RUTAS
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/children', require('./routes/children'));
+app.use('/api/safe-zones', require('./routes/safeZones'));
+app.use('/api/alerts', require('./routes/alerts'));
+app.use('/api/locations', require('./routes/locations'));
+
+// 🏠 RUTA DE SALUD
 app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'OK', 
+  res.json({
+    success: true,
+    message: 'SafeKids API funcionando correctamente',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    environment: process.env.NODE_ENV || 'development',
+    version: '1.0.0'
   });
 });
 
-// Ruta raíz
+// 🏠 RUTA RAÍZ
 app.get('/', (req, res) => {
   res.json({
-    message: 'SafeKids Backend API funcionando correctamente!',
-    version: '1.0.0',
-    timestamp: new Date().toISOString(),
-    endpoints: [
-      'GET /health - Health check',
-      'GET /api/auth/test - Test autenticación',
-      'POST /api/auth/login - Login de familia',
-      'GET /api/children/test - Test niños',
-      'GET /api/location/test - Test ubicación',
-      'GET /api/alerts/test - Test alertas',
-      'GET /api/monitoring/test - Test monitoreo'
+    success: true,
+    message: 'SafeKids API v1.0 - Control Parental',
+    endpoints: {
+      auth: '/api/auth (POST /register, POST /login, GET /verify)',
+      children: '/api/children (CRUD)',
+      safeZones: '/api/safe-zones (CRUD)',
+      alerts: '/api/alerts (GET, POST)',
+      locations: '/api/locations (GET, POST)',
+      health: '/health'
+    },
+    documentation: 'Usa Postman para probar los endpoints'
+  });
+});
+
+// ❌ MANEJO DE RUTAS NO ENCONTRADAS
+app.use('*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Ruta no encontrada: ${req.method} ${req.originalUrl}`,
+    availableEndpoints: [
+      'GET /',
+      'GET /health',
+      'POST /api/auth/register',
+      'POST /api/auth/login',
+      'GET /api/auth/verify'
     ]
   });
 });
 
-// Rutas principales
-app.use('/api/auth', require('./routes/auth'));
-app.use('/api/children', require('./routes/children'));
-app.use('/api/location', require('./routes/location'));
-app.use('/api/alerts', require('./routes/alerts'));
-app.use('/api/monitoring', require('./routes/monitoring'));
-app.use('/api/safezones', require('./routes/safezones'));
-
-// Middleware de manejo de errores
+// 🚨 MANEJO GLOBAL DE ERRORES
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('❌ Error global:', {
+    message: err.message,
+    stack: err.stack,
+    url: req.url,
+    method: req.method
+  });
   
-  if (err.name === 'ValidationError') {
-    return res.status(400).json({
-      error: 'Datos de entrada inválidos',
-      details: err.message
-    });
-  }
-  
-  if (err.name === 'UnauthorizedError') {
-    return res.status(401).json({
-      error: 'No autorizado'
-    });
-  }
-  
-  res.status(500).json({
-    error: 'Error interno del servidor',
-    message: process.env.NODE_ENV === 'development' ? err.message : 'Algo salió mal'
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Error interno del servidor',
+    error: process.env.NODE_ENV === 'development' ? {
+      stack: err.stack,
+      details: err
+    } : undefined
   });
 });
 
-// Ruta no encontrada
-app.use('*', (req, res) => {
-  res.status(404).json({
-    error: 'Ruta no encontrada',
-    path: req.originalUrl
-  });
-});
+// 🚀 INICIALIZACIÓN
+const startServer = async () => {
+  try {
+    // Inicializar base de datos
+    await initDatabase();
+    
+    console.log('✅ Aplicación configurada correctamente');
+    return app;
+    
+  } catch (error) {
+    console.error('❌ Error iniciando aplicación:', error);
+    process.exit(1);
+  }
+};
+
+// Solo inicializar DB si no estamos en testing
+if (process.env.NODE_ENV !== 'test') {
+  startServer();
+}
 
 module.exports = app;
