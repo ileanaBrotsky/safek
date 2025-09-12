@@ -13,7 +13,7 @@ const Dashboard = () => {
   
   // Estado centralizado - una sola fuente de verdad
   const [allChildren, setAllChildren] = useState([]);
-  const [allAlerts, setAllAlerts] = useState([]);
+  const [_allAlerts, setAllAlerts] = useState([]);
   const [allSafeZones, setAllSafeZones] = useState([]);
   
   const [dashboardData, setDashboardData] = useState({
@@ -121,10 +121,10 @@ const Dashboard = () => {
   const navItems = [
     { id: 'dashboard', label: 'Panel Principal', icon: '📊' },
     { id: 'children', label: 'Gestión de Niños', icon: '👶' },
-    { id: 'monitoring', label: 'Monitoreo en Vivo', icon: '🗺️' }, // ← Renombrado
-    { id: 'safe-zones', label: 'Configurar Zonas', icon: '⚙️' }, // ← Nuevo enfoque
+    { id: 'monitoring', label: 'Monitoreo en Vivo', icon: '🗺️' }, 
+    { id: 'safe-zones', label: 'Configurar Zonas', icon: '⚙️' }, 
     { id: 'alerts', label: 'Alertas', icon: '🚨' },
-    { id: 'reports', label: 'Reportes', icon: '📈' } // ← Nuevo
+    { id: 'reports', label: 'Reportes', icon: '📈' } 
   ];
 
   // Renderizar contenido según la pestaña activa

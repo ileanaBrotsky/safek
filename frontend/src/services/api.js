@@ -122,6 +122,123 @@ export const childrenService = {
       console.error('Delete child error:', error);
       throw error;
     }
+  },
+  // DELETE /api/children/:id
+  delete: async (id, forceDelete = false) => {
+    try {
+      const params = forceDelete ? { force_delete: 'true' } : {};
+      const response = await api.delete(`/api/children/${id}`, { params });
+      return response.data;
+    } catch (error) {
+      console.error('Delete child error:', error);
+      throw error;
+    }
+  },
+
+  // ===== FUNCIONALIDADES ESPECIALES =====
+
+  // PATCH /api/children/:id/toggle (compatibilidad hacia atrás)
+  toggle: async (id) => {
+    try {
+      const response = await api.patch(`/api/children/${id}/toggle`);
+      return response.data;
+    } catch (error) {
+      console.error('Toggle child error:', error);
+      throw error;
+    }
+  },
+
+  // PATCH /api/children/:id/activate (nuevo método más específico)
+  setActive: async (id, isActive) => {
+    try {
+      const response = await api.patch(`/api/children/${id}/activate`, {
+        is_active: isActive
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Set child active error:', error);
+      throw error;
+    }
+  },
+
+  // PATCH /api/children/:id/risk-level
+  updateRiskLevel: async (id, riskLevel) => {
+    try {
+      const response = await api.patch(`/api/children/${id}/risk-level`, {
+        risk_level: riskLevel
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Update risk level error:', error);
+      throw error;
+    }
+  },
+
+  // ===== UBICACIONES =====
+
+  // GET /api/children/:id/location
+  getCurrentLocation: async (id) => {
+    try {
+      const response = await api.get(`/api/children/${id}/location`);
+      return response.data;
+    } catch (error) {
+      console.error('Get current location error:', error);
+      throw error;
+    }
+  },
+
+  // GET /api/children/:id/locations
+  getLocationHistory: async (id, options = {}) => {
+    try {
+      const { limit = 50, offset = 0, date } = options;
+      const params = { limit, offset };
+      if (date) params.date = date;
+      
+      const response = await api.get(`/api/children/${id}/locations`, { params });
+      return response.data;
+    } catch (error) {
+      console.error('Get location history error:', error);
+      throw error;
+    }
+  },
+
+  // ===== ESTADÍSTICAS =====
+
+  // GET /api/children/:id/stats
+  getStats: async (id, days = 7) => {
+    try {
+      const response = await api.get(`/api/children/${id}/stats`, {
+        params: { days }
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Get child stats error:', error);
+      throw error;
+    }
+  },
+
+  // ===== MÉTODOS DE UTILIDAD =====
+
+  // Activar niño
+  activate: async (id) => {
+    return await childrenService.setActive(id, true);
+  },
+
+  // Desactivar niño (borrado lógico)
+  deactivate: async (id) => {
+    return await childrenService.setActive(id, false);
+  },
+
+  // Eliminar con confirmación
+  deleteWithConfirmation: async (id, forceDelete = false) => {
+    const confirmMessage = forceDelete 
+      ? '¿Estás seguro de eliminar permanentemente este niño? Esta acción no se puede deshacer.'
+      : '¿Estás seguro de eliminar este niño? Si tiene datos históricos, solo se desactivará.';
+    
+    if (window.confirm(confirmMessage)) {
+      return await childrenService.delete(id, forceDelete);
+    }
+    return null;
   }
 };
 
