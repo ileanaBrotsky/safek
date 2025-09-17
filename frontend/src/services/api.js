@@ -114,16 +114,6 @@ export const childrenService = {
   },
 
   // DELETE /api/children/:id
-  delete: async (id) => {
-    try {
-      const response = await api.delete(`/api/children/${id}`);
-      return response.data;
-    } catch (error) {
-      console.error('Delete child error:', error);
-      throw error;
-    }
-  },
-  // DELETE /api/children/:id
   delete: async (id, forceDelete = false) => {
     try {
       const params = forceDelete ? { force_delete: 'true' } : {};
@@ -239,6 +229,38 @@ export const childrenService = {
       return await childrenService.delete(id, forceDelete);
     }
     return null;
+  },
+   // POST /api/children/:id/generate-code
+  generateRegistrationCode: async (childId) => {
+    try {
+      const response = await api.post(`/api/children/${childId}/generate-code`);
+      return response.data;
+    } catch (error) {
+      console.error('Generate registration code error:', error);
+      throw error;
+    }
+  },
+
+  // GET /api/children/:id/registration-code
+  getRegistrationCode: async (childId) => {
+    try {
+      const response = await api.get(`/api/children/${childId}/registration-code`);
+      return response.data;
+    } catch (error) {
+      console.error('Get registration code error:', error);
+      throw error;
+    }
+  },
+
+  // GET /api/children/:id/device-status
+  getDeviceStatus: async (childId) => {
+    try {
+      const response = await api.get(`/api/children/${childId}/device-status`);
+      return response.data;
+    } catch (error) {
+      console.error('Get device status error:', error);
+      throw error;
+    }
   }
 };
 

@@ -35,11 +35,14 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('combined'));
 
 // 🔗 RUTAS
+// 🔗 RUTAS
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/auth', require('./routes/deviceAuth')); // Rutas de autenticación para dispositivos
 app.use('/api/children', require('./routes/children'));
 app.use('/api/safe-zones', require('./routes/safeZones'));
 app.use('/api/alerts', require('./routes/alerts'));
 app.use('/api/locations', require('./routes/locations'));
+app.use('/api/devices', require('./routes/deviceAuth')); // Rutas de gestión de dispositivos
 
 // 🏠 RUTA DE SALUD
 app.get('/health', (req, res) => {

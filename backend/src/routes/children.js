@@ -583,4 +583,237 @@ router.patch('/:id/risk-level', authenticateToken, async (req, res) => {
     });
   }
 });
+
+// Importar la función de generación de código
+const crypto = require('crypto');
+
+// Función para generar código único
+function generateRegistrationCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+}
+
+// 📱 GENERAR CÓDIGO DE REGISTRO PARA UN NIÑO
+router.post('/:id/generate-code', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    // Verificar que el niño pertenece al usuario
+    const childResult = await query(
+      'SELECT * FROM children WHERE id = $1 AND family_id = (SELECT id FROM families WHERE user_id = $2)',
+      [id, userId]
+    );
+
+    if (childResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Niño no encontrado'
+      });
+    }
+
+    const child = childResult.rows[0];
+
+    // Invalidar códigos anteriores no usados
+    await query(
+      'UPDATE registration_codes SET expires_at = NOW() WHERE child_id = $1 AND used = false',
+      [id]
+    );
+
+    // Generar nuevo código único
+    let code;
+    let codeExists = true;
+    let attempts = 0;
+    
+    while (codeExists && attempts < 10) {
+      code = generateRegistrationCode();
+      const existing = await query(
+        'SELECT id FROM registration_codes WHERE code = $1',
+        [code]
+      );
+      codeExists = existing.rows.length > 0;
+      attempts++;
+    }
+
+    if (codeExists) {
+      throw new Error('No se pudo generar un código único');
+    }
+
+    // Crear el código con expiración de 24 horas
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 24);
+
+    const codeResult = await query(
+      `INSERT INTO registration_codes (code, child_id, expires_at, created_by) 
+       VALUES ($1, $2, $3, $4) 
+       RETURNING code, expires_at`,
+      [code, id, expiresAt, userId]
+    );
+
+    console.log('✅ Código de registro generado:', {
+      code,
+      childId: id,
+      childName: child.name
+    });
+
+    res.json({
+      success: true,
+      message: 'Código generado exitosamente',
+      data: {
+        code: codeResult.rows[0].code,
+        expires_at: codeResult.rows[0].expires_at,
+        child_name: child.name,
+        child_id: id
+      }
+    });
+
+  } catch (error) {
+    console.error('Error generando código de registro:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generando código de registro',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// 📱 OBTENER CÓDIGO DE REGISTRO ACTIVO
+router.get('/:id/registration-code', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    // Verificar permisos
+    const childResult = await query(
+      'SELECT name FROM children WHERE id = $1 AND family_id = (SELECT id FROM families WHERE user_id = $2)',
+      [id, userId]
+    );
+
+    if (childResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Niño no encontrado'
+      });
+    }
+
+    // Buscar código activo
+    const codeResult = await query(
+      `SELECT code, expires_at, used, used_at 
+       FROM registration_codes 
+       WHERE child_id = $1 
+         AND expires_at > NOW() 
+       ORDER BY created_at DESC 
+       LIMIT 1`,
+      [id]
+    );
+
+    if (codeResult.rows.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          has_code: false,
+          message: 'No hay código activo'
+        }
+      });
+    }
+
+    const code = codeResult.rows[0];
+
+    res.json({
+      success: true,
+      data: {
+        has_code: true,
+        code: code.code,
+        expires_at: code.expires_at,
+        used: code.used,
+        used_at: code.used_at,
+        child_name: childResult.rows[0].name
+      }
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo código de registro:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo código de registro'
+    });
+  }
+});
+
+// 📱 OBTENER ESTADO DEL DISPOSITIVO
+router.get('/:id/device-status', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    // Verificar permisos
+    const childResult = await query(
+      `SELECT c.*, d.* 
+       FROM children c
+       LEFT JOIN devices d ON c.device_id = d.device_id
+       WHERE c.id = $1 
+         AND c.family_id = (SELECT id FROM families WHERE user_id = $2)`,
+      [id, userId]
+    );
+
+    if (childResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Niño no encontrado'
+      });
+    }
+
+    const child = childResult.rows[0];
+
+    if (!child.device_id) {
+      return res.json({
+        success: true,
+        data: {
+          is_registered: false,
+          message: 'No hay dispositivo registrado'
+        }
+      });
+    }
+
+    // Calcular si está en línea (última conexión hace menos de 5 minutos)
+    const lastSeen = new Date(child.last_seen);
+    const now = new Date();
+    const diffMinutes = Math.floor((now - lastSeen) / 60000);
+    const isOnline = diffMinutes < 5;
+
+    res.json({
+      success: true,
+      data: {
+        is_registered: true,
+        is_active: child.is_active,
+        is_online: isOnline,
+        device_info: {
+          device_id: child.device_id,
+          device_name: child.device_name,
+          brand: child.brand,
+          model: child.model,
+          os: child.os,
+          os_version: child.os_version,
+          app_version: child.app_version,
+          battery_level: child.battery_level
+        },
+        last_seen: child.last_seen,
+        registered_at: child.registered_at,
+        minutes_since_last_seen: diffMinutes
+      }
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo estado del dispositivo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estado del dispositivo'
+    });
+  }
+});
+
 module.exports = router;
