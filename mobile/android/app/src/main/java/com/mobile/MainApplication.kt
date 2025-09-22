@@ -1,3 +1,4 @@
+// mobile/android/app/src/main/java/com/mobile/MainApplication.kt
 package com.mobile
 
 import android.app.Application
@@ -18,6 +19,9 @@ class MainApplication : Application(), ReactApplication {
             PackageList(this).packages.apply {
               // Packages that cannot be autolinked yet can be added manually here, for example:
               // add(MyReactNativePackage())
+              
+              // ✅ AGREGAR: Registrar nuestro módulo de Usage Stats
+              add(UsageStatsPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

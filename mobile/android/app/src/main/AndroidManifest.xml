@@ -10,15 +10,25 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     
+    <!-- ✅ NUEVO: Permisos para monitoreo de aplicaciones -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        android:protectionLevel="signature|privileged"
+        android:usesPermissionFlags="neverForLocation" />
+    
     <!-- Permisos para servicios en segundo plano -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     
     <!-- Permisos de sistema para el funcionamiento continuo -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    
+    <!-- ✅ NUEVO: Permisos adicionales para monitoreo completo -->
+    <uses-permission android:name="android.permission.GET_TASKS" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <application
       android:name=".MainApplication"
@@ -47,6 +57,13 @@
         android:enabled="true"
         android:exported="false"
         android:foregroundServiceType="location" />
+      
+      <!-- ✅ NUEVO: Servicio de monitoreo de aplicaciones -->
+      <service
+        android:name=".AppMonitoringBackgroundService"
+        android:enabled="true"
+        android:exported="false"
+        android:foregroundServiceType="dataSync" />
         
       <!-- Receptor para iniciar automáticamente al arrancar el dispositivo -->
       <receiver
@@ -55,6 +72,18 @@
         android:exported="true">
         <intent-filter>
           <action android:name="android.intent.action.BOOT_COMPLETED" />
+        </intent-filter>
+      </receiver>
+      
+      <!-- ✅ NUEVO: Receptor para detectar cambios en apps -->
+      <receiver
+        android:name=".AppChangeReceiver"
+        android:enabled="true"
+        android:exported="false">
+        <intent-filter>
+          <action android:name="android.intent.action.PACKAGE_ADDED" />
+          <action android:name="android.intent.action.PACKAGE_REMOVED" />
+          <data android:scheme="package" />
         </intent-filter>
       </receiver>
     </application>

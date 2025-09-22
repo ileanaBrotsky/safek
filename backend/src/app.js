@@ -1,4 +1,4 @@
-// backend/src/app.js
+// backend/src/app.js - ACTUALIZADO con ruta de monitoreo
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -21,7 +21,7 @@ app.use(cors({
 // 🚦 RATE LIMITING
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 1000, // límite de 100 requests por ventana
+  max: 1000, // límite de 1000 requests por ventana (aumentado para monitoreo)
   message: {
     success: false,
     message: 'Demasiadas peticiones, intenta de nuevo más tarde'
@@ -35,7 +35,6 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('combined'));
 
 // 🔗 RUTAS
-// 🔗 RUTAS
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/auth', require('./routes/deviceAuth')); // Rutas de autenticación para dispositivos
 app.use('/api/children', require('./routes/children'));
@@ -44,6 +43,9 @@ app.use('/api/alerts', require('./routes/alerts'));
 app.use('/api/locations', require('./routes/locations'));
 app.use('/api/devices', require('./routes/deviceAuth')); // Rutas de gestión de dispositivos
 
+// ✅ NUEVA RUTA: Monitoreo de aplicaciones
+app.use('/api/monitoring', require('./routes/monitoring'));
+
 // 🏠 RUTA DE SALUD
 app.get('/health', (req, res) => {
   res.json({
@@ -51,7 +53,13 @@ app.get('/health', (req, res) => {
     message: 'SafeKids API funcionando correctamente',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
-    version: '1.0.0'
+    version: '1.1.0', // Incrementamos versión
+    features: {
+      location_tracking: true,
+      app_monitoring: true, // ✅ Nueva funcionalidad
+      safe_zones: true,
+      alerts: true
+    }
   });
 });
 
@@ -59,15 +67,23 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     success: true,
-    message: 'SafeKids API v1.0 - Control Parental',
+    message: 'SafeKids API v1.1 - Control Parental con Monitoreo de Apps',
     endpoints: {
       auth: '/api/auth (POST /register, POST /login, GET /verify)',
       children: '/api/children (CRUD)',
       safeZones: '/api/safe-zones (CRUD)',
       alerts: '/api/alerts (GET, POST)',
       locations: '/api/locations (GET, POST)',
+      monitoring: '/api/monitoring (GET /config, POST /usage-stats)', // ✅ Nueva
+      devices: '/api/devices (CRUD)',
       health: '/health'
     },
+    new_features: [
+      'Monitoreo de aplicaciones Android',
+      'Estadísticas de tiempo de pantalla',
+      'Límites por aplicación',
+      'Detección de hora de dormir'
+    ],
     documentation: 'Usa Postman para probar los endpoints'
   });
 });
@@ -82,7 +98,9 @@ app.use('*', (req, res) => {
       'GET /health',
       'POST /api/auth/register',
       'POST /api/auth/login',
-      'GET /api/auth/verify'
+      'GET /api/auth/verify',
+      'POST /api/monitoring/usage-stats', // ✅ Nueva
+      'GET /api/monitoring/config' // ✅ Nueva
     ]
   });
 });
@@ -113,6 +131,12 @@ const startServer = async () => {
     await initDatabase();
     
     console.log('✅ Aplicación configurada correctamente');
+    console.log('🔧 Funcionalidades habilitadas:');
+    console.log('  📍 Seguimiento de ubicación');
+    console.log('  📱 Monitoreo de aplicaciones'); // ✅ Nueva
+    console.log('  🚨 Sistema de alertas');
+    console.log('  🛡️ Zonas seguras');
+    
     return app;
     
   } catch (error) {

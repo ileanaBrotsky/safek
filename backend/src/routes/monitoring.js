@@ -1,229 +1,493 @@
-// backend/src/routes/monitoring.js
+// backend/src/routes/monitoring.js - ACTUALIZADO con endpoints de apps
 const express = require('express');
+const router = express.Router();
 const { query } = require('../models/database');
 const { authenticateToken } = require('../middleware/auth');
 
-const router = express.Router();
-
-// Dashboard con métricas generales
-router.get('/dashboard', authenticateToken, async (req, res) => {
+// ✅ NUEVO: Recibir estadísticas de uso de aplicaciones
+router.post('/usage-stats', authenticateToken, async (req, res) => {
   try {
-    // Contar niños activos
-    const activeChildren = await query(
-      'SELECT COUNT(*) as count FROM children WHERE family_id = $1 AND is_active = true',
-      [req.familyId]
-    );
-
-    // Contar alertas del día
-    const todayAlerts = await query(`
-      SELECT COUNT(*) as count 
-      FROM alerts 
-      WHERE family_id = $1 AND DATE(created_at) = CURRENT_DATE
-    `, [req.familyId]);
-
-    // Contar alertas no leídas
-    const unreadAlerts = await query(`
-      SELECT COUNT(*) as count 
-      FROM alerts 
-      WHERE family_id = $1 AND is_read = false
-    `, [req.familyId]);
-
-    // Ubicaciones del día
-    const locationsToday = await query(`
-      SELECT COUNT(*) as count 
-      FROM child_locations cl
-      JOIN children c ON cl.child_id = c.id
-      WHERE c.family_id = $1 AND DATE(cl.timestamp) = CURRENT_DATE
-    `, [req.familyId]);
-
-    // Actividad por niño
-    const childrenActivity = await query(`
-      SELECT 
-        c.id, c.name, c.risk_level,
-        COUNT(cl.id) as location_updates_today,
-        MAX(cl.timestamp) as last_location,
-        COUNT(a.id) as alerts_today
-      FROM children c
-      LEFT JOIN child_locations cl ON c.id = cl.child_id AND DATE(cl.timestamp) = CURRENT_DATE
-      LEFT JOIN alerts a ON c.id = a.child_id AND DATE(a.created_at) = CURRENT_DATE
-      WHERE c.family_id = $1 AND c.is_active = true
-      GROUP BY c.id, c.name, c.risk_level
-      ORDER BY c.name
-    `, [req.familyId]);
-
-    res.json({
-      success: true,
-      dashboard: {
-        metrics: {
-          activeChildren: parseInt(activeChildren.rows[0].count),
-          todayAlerts: parseInt(todayAlerts.rows[0].count),
-          unreadAlerts: parseInt(unreadAlerts.rows[0].count),
-          locationsToday: parseInt(locationsToday.rows[0].count)
-        },
-        childrenActivity: childrenActivity.rows
+    const { timestamp, usageData, todayUsage, device_info, child_id } = req.body;
+    
+    // Si viene child_id en el body, usarlo (para dispositivos)
+    // Si no, buscar el primer child del usuario (para pruebas)
+    let childId = child_id;
+    
+    if (!childId) {
+      const childResult = await query('SELECT id FROM children WHERE family_id = $1 LIMIT 1', [req.user.id]);
+      if (childResult.rows.length > 0) {
+        childId = childResult.rows[0].id;
       }
+    }
+
+    if (!childId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Child ID not found. Provide child_id or ensure user has children.'
+      });
+    }
+
+    // Validar datos requeridos
+    if (!timestamp || !usageData || !Array.isArray(usageData)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid usage data format'
+      });
+    }
+
+    console.log(`📊 Receiving usage stats for child ${childId}: ${usageData.length} apps`);
+
+    // Insertar estadísticas de uso en la base de datos
+    for (const app of usageData) {
+      await query(`
+        INSERT INTO app_usage_stats (
+          child_id, 
+          package_name, 
+          app_name, 
+          usage_time_ms, 
+          first_timestamp, 
+          last_timestamp,
+          total_time_foreground,
+          recorded_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (child_id, package_name, DATE(recorded_at)) 
+        DO UPDATE SET
+          usage_time_ms = app_usage_stats.usage_time_ms + EXCLUDED.usage_time_ms,
+          total_time_foreground = EXCLUDED.total_time_foreground,
+          last_timestamp = EXCLUDED.last_timestamp,
+          updated_at = NOW()
+      `, [
+        childId,
+        app.packageName,
+        app.appName,
+        app.usageTime,
+        new Date(app.firstTimeStamp),
+        new Date(app.lastTimeStamp),
+        app.totalTimeForeground,
+        new Date(timestamp)
+      ]);
+    }
+
+    // Actualizar información del dispositivo
+    if (device_info) {
+      await query(`
+        UPDATE children 
+        SET 
+          last_battery_level = $1,
+          last_seen = NOW(),
+          updated_at = NOW()
+        WHERE id = $2
+      `, [device_info.battery_level || null, childId]);
+    }
+
+    // Verificar límites y generar alertas si es necesario
+    await checkAppUsageLimits(childId, todayUsage);
+
+    res.json({
+      success: true,
+      message: 'Usage stats received successfully',
+      processed_apps: usageData.length
     });
 
   } catch (error) {
-    console.error('Error obteniendo dashboard:', error);
+    console.error('Error processing usage stats:', error);
     res.status(500).json({
-      error: 'Error obteniendo métricas del dashboard'
+      success: false,
+      error: 'Error processing usage stats'
     });
   }
 });
 
-// Historial de ubicaciones de un niño
-router.get('/locations/:childId', authenticateToken, async (req, res) => {
+// ✅ NUEVO: Obtener configuración de monitoreo
+router.get('/config', authenticateToken, async (req, res) => {
   try {
-    const { childId } = req.params;
-    const { days = 7, limit = 100 } = req.query;
+    const { child_id } = req.query;
+    
+    // Si viene child_id en query, usarlo, si no buscar el primer child del usuario
+    let childId = child_id;
+    
+    if (!childId) {
+      const childResult = await query('SELECT id FROM children WHERE family_id = $1 LIMIT 1', [req.user.id]);
+      if (childResult.rows.length > 0) {
+        childId = childResult.rows[0].id;
+      }
+    }
 
-    // Verificar que el niño pertenece a la familia
-    const childCheck = await query(
-      'SELECT id, name FROM children WHERE id = $1 AND family_id = $2',
-      [childId, req.familyId]
-    );
-
-    if (childCheck.rows.length === 0) {
-      return res.status(404).json({
-        error: 'Niño no encontrado'
+    if (!childId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Child ID not found. Provide child_id parameter or ensure user has children.'
       });
     }
 
-    const locations = await query(`
+    // Obtener configuración del niño
+    const childConfig = await query(`
       SELECT 
-        latitude, longitude, address, accuracy, timestamp
-      FROM child_locations
+        max_screen_time,
+        max_social_time,
+        bedtime_hour,
+        wakeup_hour,
+        monitoring_enabled
+      FROM children 
+      WHERE id = $1
+    `, [childId]);
+
+    // Obtener límites específicos por aplicación
+    const appLimits = await query(`
+      SELECT 
+        package_name,
+        daily_limit_minutes,
+        is_blocked,
+        category
+      FROM app_limits 
+      WHERE child_id = $1
+    `, [childId]);
+
+    const config = {
+      enabled: childConfig.rows[0]?.monitoring_enabled ?? true,
+      updateInterval: 30000, // 30 segundos
+      socialMediaLimit: childConfig.rows[0]?.max_social_time || 60,
+      gamesLimit: 120, // Por defecto 2 horas
+      bedtimeStart: childConfig.rows[0]?.bedtime_hour || '22:00',
+      bedtimeEnd: childConfig.rows[0]?.wakeup_hour || '07:00',
+      appLimits: {}
+    };
+
+    // Convertir límites de apps a formato esperado
+    appLimits.rows.forEach(limit => {
+      config.appLimits[limit.package_name] = {
+        dailyLimit: limit.daily_limit_minutes,
+        isBlocked: limit.is_blocked,
+        category: limit.category
+      };
+    });
+
+    res.json({
+      success: true,
+      data: config
+    });
+
+  } catch (error) {
+    console.error('Error getting monitoring config:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error getting monitoring configuration'
+    });
+  }
+});
+
+// ✅ NUEVO: Actualizar configuración de monitoreo
+router.put('/config', authenticateToken, async (req, res) => {
+  try {
+    const { 
+      enabled, 
+      socialMediaLimit, 
+      gamesLimit, 
+      bedtimeStart, 
+      bedtimeEnd,
+      child_id 
+    } = req.body;
+
+    // Si viene child_id en body, usarlo, si no buscar el primer child del usuario
+    let childId = child_id;
+    
+    if (!childId) {
+      const childResult = await query('SELECT id FROM children WHERE family_id = $1 LIMIT 1', [req.user.id]);
+      if (childResult.rows.length > 0) {
+        childId = childResult.rows[0].id;
+      }
+    }
+
+    if (!childId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Child ID not found. Provide child_id or ensure user has children.'
+      });
+    }
+
+    // Actualizar configuración del niño
+    await query(`
+      UPDATE children 
+      SET 
+        monitoring_enabled = $1,
+        max_social_time = $2,
+        bedtime_hour = $3,
+        wakeup_hour = $4,
+        updated_at = NOW()
+      WHERE id = $5
+    `, [
+      enabled,
+      socialMediaLimit,
+      bedtimeStart,
+      bedtimeEnd,
+      childId
+    ]);
+
+    res.json({
+      success: true,
+      message: 'Configuration updated successfully'
+    });
+
+  } catch (error) {
+    console.error('Error updating monitoring config:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error updating monitoring configuration'
+    });
+  }
+});
+
+// Función auxiliar para obtener child_id
+async function getChildId(req, childIdFromParam = null) {
+  let childId = childIdFromParam;
+  
+  if (!childId) {
+    // Buscar en family_id primero, luego en user_id como fallback
+    let childResult = await query('SELECT id FROM children WHERE family_id = $1 LIMIT 1', [req.user.id]);
+    
+    if (childResult.rows.length === 0) {
+      // Fallback a user_id si family_id no existe o no tiene resultados
+      childResult = await query('SELECT id FROM children WHERE user_id = $1 LIMIT 1', [req.user.id]);
+    }
+    
+    if (childResult.rows.length > 0) {
+      childId = childResult.rows[0].id;
+    }
+  }
+  
+  return childId;
+}
+
+// ✅ NUEVO: Obtener estadísticas de uso por fecha
+router.get('/usage-stats/:date?', authenticateToken, async (req, res) => {
+  try {
+    const date = req.params.date || new Date().toISOString().split('T')[0];
+    const childId = await getChildId(req, req.query.child_id);
+
+    if (!childId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Child ID not found'
+      });
+    }
+
+    const usageStats = await query(`
+      SELECT 
+        package_name,
+        app_name,
+        SUM(usage_time_ms) as total_usage_ms,
+        MAX(last_timestamp) as last_used,
+        COUNT(*) as usage_sessions
+      FROM app_usage_stats
       WHERE child_id = $1 
-        AND timestamp >= CURRENT_DATE - INTERVAL '${days} days'
-      ORDER BY timestamp DESC
-      LIMIT $2
-    `, [childId, limit]);
+        AND DATE(recorded_at) = $2
+      GROUP BY package_name, app_name
+      ORDER BY total_usage_ms DESC
+    `, [childId, date]);
 
     res.json({
       success: true,
-      child: childCheck.rows[0],
-      locations: locations.rows,
-      period: `${days} días`,
-      total: locations.rows.length
+      date: date,
+      stats: usageStats.rows
     });
 
   } catch (error) {
-    console.error('Error obteniendo historial de ubicaciones:', error);
+    console.error('Error getting usage stats:', error);
     res.status(500).json({
-      error: 'Error obteniendo historial de ubicaciones'
+      success: false,
+      error: 'Error getting usage statistics'
     });
   }
 });
 
-// Estadísticas de tiempo en zonas
-router.get('/zone-stats/:childId', authenticateToken, async (req, res) => {
+// ✅ NUEVO: Establecer límites para aplicaciones específicas
+router.post('/app-limits', authenticateToken, async (req, res) => {
   try {
-    const { childId } = req.params;
-    const { days = 7 } = req.query;
+    const { packageName, dailyLimitMinutes, isBlocked, category, child_id } = req.body;
+    const childId = await getChildId(req, child_id);
 
-    // Verificar que el niño pertenece a la familia
-    const childCheck = await query(
-      'SELECT id, name FROM children WHERE id = $1 AND family_id = $2',
-      [childId, req.familyId]
-    );
-
-    if (childCheck.rows.length === 0) {
-      return res.status(404).json({
-        error: 'Niño no encontrado'
+    if (!childId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Child ID not found'
       });
     }
 
-    // Obtener zonas seguras de la familia
-    const safeZones = await query(
-      'SELECT * FROM safe_zones WHERE family_id = $1 AND is_active = true',
-      [req.familyId]
-    );
-
-    // Simular estadísticas (en una implementación real calcularías tiempo en cada zona)
-    const zoneStats = safeZones.rows.map(zone => ({
-      zoneId: zone.id,
-      zoneName: zone.name,
-      zoneType: zone.zone_type,
-      timeSpent: Math.floor(Math.random() * 480), // Minutos simulados
-      visits: Math.floor(Math.random() * 20) + 1,
-      lastVisit: new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString()
-    }));
+    await query(`
+      INSERT INTO app_limits (
+        child_id, 
+        package_name, 
+        daily_limit_minutes, 
+        is_blocked, 
+        category,
+        created_at
+      ) VALUES ($1, $2, $3, $4, $5, NOW())
+      ON CONFLICT (child_id, package_name) 
+      DO UPDATE SET
+        daily_limit_minutes = EXCLUDED.daily_limit_minutes,
+        is_blocked = EXCLUDED.is_blocked,
+        category = EXCLUDED.category,
+        updated_at = NOW()
+    `, [childId, packageName, dailyLimitMinutes, isBlocked, category]);
 
     res.json({
       success: true,
-      child: childCheck.rows[0],
-      period: `${days} días`,
-      zoneStats: zoneStats
+      message: 'App limit set successfully'
     });
 
   } catch (error) {
-    console.error('Error obteniendo estadísticas de zonas:', error);
+    console.error('Error setting app limit:', error);
     res.status(500).json({
-      error: 'Error obteniendo estadísticas de zonas'
+      success: false,
+      error: 'Error setting app limit'
     });
   }
 });
 
-// Resumen de alertas por tipo
-router.get('/alerts-summary', authenticateToken, async (req, res) => {
+// ✅ NUEVO: Obtener resumen de uso semanal
+router.get('/weekly-summary', authenticateToken, async (req, res) => {
   try {
-    const { days = 30 } = req.query;
+    const childId = await getChildId(req, req.query.child_id);
 
-    const alertsSummary = await query(`
+    if (!childId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Child ID not found'
+      });
+    }
+
+    // Últimos 7 días
+    const weeklyStats = await query(`
       SELECT 
+        DATE(recorded_at) as date,
+        SUM(usage_time_ms) / 1000 / 60 as total_minutes,
+        COUNT(DISTINCT package_name) as apps_used
+      FROM app_usage_stats
+      WHERE child_id = $1 
+        AND recorded_at >= CURRENT_DATE - INTERVAL '7 days'
+      GROUP BY DATE(recorded_at)
+      ORDER BY date DESC
+    `, [childId]);
+
+    // Apps más usadas de la semana
+    const topApps = await query(`
+      SELECT 
+        package_name,
+        app_name,
+        SUM(usage_time_ms) / 1000 / 60 as total_minutes
+      FROM app_usage_stats
+      WHERE child_id = $1 
+        AND recorded_at >= CURRENT_DATE - INTERVAL '7 days'
+      GROUP BY package_name, app_name
+      ORDER BY total_minutes DESC
+      LIMIT 10
+    `, [childId]);
+
+    res.json({
+      success: true,
+      weekly_stats: weeklyStats.rows,
+      top_apps: topApps.rows
+    });
+
+  } catch (error) {
+    console.error('Error getting weekly summary:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error getting weekly summary'
+    });
+  }
+});
+
+// Función auxiliar para verificar límites de uso
+async function checkAppUsageLimits(childId, todayUsage) {
+  try {
+    if (!todayUsage) return;
+
+    // Obtener límites configurados
+    const limits = await query(`
+      SELECT 
+        package_name,
+        daily_limit_minutes,
+        category
+      FROM app_limits 
+      WHERE child_id = $1 AND is_blocked = false
+    `, [childId]);
+
+    // Obtener configuración general del niño
+    const childConfig = await query(`
+      SELECT max_screen_time, max_social_time 
+      FROM children 
+      WHERE id = $1
+    `, [childId]);
+
+    const config = childConfig.rows[0] || {};
+
+    for (const [packageName, usageMs] of Object.entries(todayUsage)) {
+      const usageMinutes = usageMs / (1000 * 60);
+      
+      // Verificar límite específico de la app
+      const appLimit = limits.rows.find(l => l.package_name === packageName);
+      
+      if (appLimit && usageMinutes >= appLimit.daily_limit_minutes) {
+        await createAlert(childId, 'app_limit_exceeded', 'medium', {
+          package_name: packageName,
+          used_minutes: Math.round(usageMinutes),
+          limit_minutes: appLimit.daily_limit_minutes
+        });
+      }
+    }
+
+    // Verificar límite total de tiempo de pantalla
+    const totalUsageMinutes = Object.values(todayUsage)
+      .reduce((sum, ms) => sum + (ms / (1000 * 60)), 0);
+
+    if (config.max_screen_time && totalUsageMinutes >= config.max_screen_time) {
+      await createAlert(childId, 'screen_time_limit_exceeded', 'high', {
+        used_minutes: Math.round(totalUsageMinutes),
+        limit_minutes: config.max_screen_time
+      });
+    }
+
+  } catch (error) {
+    console.error('Error checking app usage limits:', error);
+  }
+}
+
+// Función auxiliar para crear alertas
+async function createAlert(childId, type, severity, data) {
+  try {
+    // Obtener el family_id del niño
+    const familyResult = await query(`
+      SELECT user_id as family_id FROM children WHERE id = $1
+    `, [childId]);
+
+    if (familyResult.rows.length === 0) return;
+
+    const familyId = familyResult.rows[0].family_id;
+
+    await query(`
+      INSERT INTO alerts (
+        family_id,
+        child_id,
         alert_type,
         severity,
-        COUNT(*) as count,
-        MAX(created_at) as last_occurrence
-      FROM alerts
-      WHERE family_id = $1 
-        AND created_at >= CURRENT_DATE - INTERVAL '${days} days'
-      GROUP BY alert_type, severity
-      ORDER BY count DESC, severity DESC
-    `, [req.familyId]);
+        message,
+        data,
+        created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+    `, [
+      familyId,
+      childId,
+      type,
+      severity,
+      `App usage limit exceeded`,
+      JSON.stringify(data)
+    ]);
 
-    // Tendencia de alertas por día
-    const alertsTrend = await query(`
-      SELECT 
-        DATE(created_at) as date,
-        COUNT(*) as alerts_count,
-        COUNT(CASE WHEN severity IN ('high', 'critical') THEN 1 END) as high_priority_count
-      FROM alerts
-      WHERE family_id = $1 
-        AND created_at >= CURRENT_DATE - INTERVAL '${days} days'
-      GROUP BY DATE(created_at)
-      ORDER BY date DESC
-      LIMIT 30
-    `, [req.familyId]);
-
-    res.json({
-      success: true,
-      period: `${days} días`,
-      summary: alertsSummary.rows,
-      trend: alertsTrend.rows
-    });
-
+    console.log(`🚨 Alert created: ${type} for child ${childId}`);
   } catch (error) {
-    console.error('Error obteniendo resumen de alertas:', error);
-    res.status(500).json({
-      error: 'Error obteniendo resumen de alertas'
-    });
+    console.error('Error creating alert:', error);
   }
-});
-
-// Ruta de test
-router.get('/test', (req, res) => {
-  res.json({ 
-    message: 'Ruta de monitoring funcionando correctamente',
-    timestamp: new Date().toISOString(),
-    endpoints: [
-      'GET /api/monitoring/dashboard - Métricas generales',
-      'GET /api/monitoring/locations/:childId - Historial de ubicaciones',
-      'GET /api/monitoring/zone-stats/:childId - Estadísticas de zonas',
-      'GET /api/monitoring/alerts-summary - Resumen de alertas'
-    ]
-  });
-});
+}
 
 module.exports = router;
