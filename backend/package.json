@@ -48,6 +48,7 @@
     "node": ">=16.0.0"
   },
   "devDependencies": {
+    "axios": "^1.12.2",
     "jest": "^29.6.1",
     "nodemon": "^3.0.1",
     "supertest": "^6.3.3"
