@@ -50,33 +50,33 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
       </activity>
-      
+      <!-- PARA CONECTAR MAS ADELANTE TODAVIA NO EXISTE -->
       <!-- Servicio de localización en segundo plano -->
-      <service
+      <!-- <service
         android:name=".LocationBackgroundService"
         android:enabled="true"
         android:exported="false"
-        android:foregroundServiceType="location" />
+        android:foregroundServiceType="location" /> -->
       
       <!-- ✅ NUEVO: Servicio de monitoreo de aplicaciones -->
-      <service
+      <!-- <service
         android:name=".AppMonitoringBackgroundService"
         android:enabled="true"
         android:exported="false"
-        android:foregroundServiceType="dataSync" />
+        android:foregroundServiceType="dataSync" /> -->
         
       <!-- Receptor para iniciar automáticamente al arrancar el dispositivo -->
-      <receiver
+      <!-- <receiver
         android:name=".BootReceiver"
         android:enabled="true"
         android:exported="true">
         <intent-filter>
           <action android:name="android.intent.action.BOOT_COMPLETED" />
         </intent-filter>
-      </receiver>
+      </receiver> -->
       
       <!-- ✅ NUEVO: Receptor para detectar cambios en apps -->
-      <receiver
+      <!-- <receiver
         android:name=".AppChangeReceiver"
         android:enabled="true"
         android:exported="false">
@@ -85,6 +85,6 @@
           <action android:name="android.intent.action.PACKAGE_REMOVED" />
           <data android:scheme="package" />
         </intent-filter>
-      </receiver>
+      </receiver> -->
     </application>
 </manifest>

@@ -21,7 +21,7 @@ class MainApplication : Application(), ReactApplication {
               // add(MyReactNativePackage())
               
               // ✅ AGREGAR: Registrar nuestro módulo de Usage Stats
-              add(UsageStatsPackage())
+             // add(UsageStatsPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

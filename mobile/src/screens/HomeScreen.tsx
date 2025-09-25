@@ -51,9 +51,9 @@ const HomeScreen: React.FC = () => {
     appsUsed: 0,
     mostUsedApp: 'Ninguna',
     socialMediaTime: 0,
-    gamesTime: 0
+    gamesTime: 0,
   });
-  
+
   const [monitoringStatus, setMonitoringStatus] = useState<MonitoringStatus>({
     location: false,
     apps: false,
@@ -67,10 +67,10 @@ const HomeScreen: React.FC = () => {
     updateBatteryLevel();
     startLocationTracking();
     loadTodayUsageStats();
-    
+
     // Actualizar estadísticas cada minuto
     const statsInterval = setInterval(loadTodayUsageStats, 60000);
-    
+
     return () => clearInterval(statsInterval);
   }, []);
 
@@ -78,10 +78,10 @@ const HomeScreen: React.FC = () => {
     try {
       const childName = await AsyncStorage.getItem('childName');
       const childId = ApiService.getChildId();
-      
+
       if (childId) {
         const response = await ApiService.get(`/api/children/${childId}`);
-        
+
         if (response.success) {
           setChildInfo({
             name: response.data.name,
@@ -107,9 +107,11 @@ const HomeScreen: React.FC = () => {
 
   const loadMonitoringStatus = async () => {
     try {
-      const locationPermission = await LocationService.checkLocationPermission();
-      const appsPermission = await AppMonitoringService.checkUsageStatsPermission();
-      
+      const locationPermission =
+        await LocationService.checkLocationPermission();
+      const appsPermission =
+        await AppMonitoringService.checkUsageStatsPermission();
+
       setMonitoringStatus({
         location: locationPermission,
         apps: appsPermission && AppMonitoringService.isMonitoringActive(),
@@ -123,14 +125,15 @@ const HomeScreen: React.FC = () => {
 
   const loadTodayUsageStats = async () => {
     try {
-      const hasPermission = await AppMonitoringService.checkUsageStatsPermission();
-      
+      const hasPermission =
+        await AppMonitoringService.checkUsageStatsPermission();
+
       if (!hasPermission) {
         return;
       }
 
       const usageStats = await AppMonitoringService.getUsageStats();
-      
+
       if (usageStats.length === 0) {
         return;
       }
@@ -142,7 +145,14 @@ const HomeScreen: React.FC = () => {
       let maxUsageTime = 0;
 
       // Categorías de redes sociales y juegos
-      const socialApps = ['facebook', 'instagram', 'twitter', 'snapchat', 'tiktok', 'whatsapp'];
+      const socialApps = [
+        'facebook',
+        'instagram',
+        'twitter',
+        'snapchat',
+        'tiktok',
+        'whatsapp',
+      ];
       const gameApps = ['game', 'play', 'minecraft', 'roblox', 'pubg'];
 
       usageStats.forEach(app => {
@@ -157,11 +167,11 @@ const HomeScreen: React.FC = () => {
 
         // Categorizar tiempo
         const packageLower = app.packageName.toLowerCase();
-        
+
         if (socialApps.some(social => packageLower.includes(social))) {
           socialTime += usageMinutes;
         }
-        
+
         if (gameApps.some(game => packageLower.includes(game))) {
           gamesTime += usageMinutes;
         }
@@ -172,9 +182,8 @@ const HomeScreen: React.FC = () => {
         appsUsed: usageStats.length,
         mostUsedApp: mostUsedApp || 'Ninguna',
         socialMediaTime: Math.round(socialTime),
-        gamesTime: Math.round(gamesTime)
+        gamesTime: Math.round(gamesTime),
       });
-
     } catch (error) {
       console.error('Error loading today usage stats:', error);
     }
@@ -184,7 +193,7 @@ const HomeScreen: React.FC = () => {
     try {
       const started = await LocationService.startTracking();
       setMonitoringStatus(prev => ({ ...prev, location: started }));
-      
+
       if (started) {
         setLastSync(new Date().toLocaleTimeString());
       }
@@ -214,73 +223,93 @@ const HomeScreen: React.FC = () => {
   };
 
   const toggleMonitoring = async (service: keyof MonitoringStatus) => {
-    const newStatus = !monitoringStatus[service];
-    
-    switch (service) {
-      case 'location':
-        if (newStatus) {
-          const success = await LocationService.startTracking();
-          if (!success) {
-            Alert.alert(
-              'Permisos Requeridos',
-              'Por favor, habilita los permisos de ubicación en la configuración del dispositivo.'
-            );
-            return;
-          }
-        } else {
-          LocationService.stopTracking();
-        }
-        break;
-      
-      case 'apps':
-      case 'screenTime':
-        if (newStatus) {
-          const success = await AppMonitoringService.startMonitoring();
-          if (!success) {
-            Alert.alert(
-              'Permisos Requeridos',
-              'SafeKids necesita acceso a las estadísticas de uso para monitorear aplicaciones. ' +
-              'Serás redirigido a la configuración del sistema.',
-              [
-                { text: 'Cancelar', style: 'cancel' },
-                {
-                  text: 'Ir a Configuración',
-                  onPress: async () => {
-                    await AppMonitoringService.requestUsageStatsPermission();
-                  }
-                }
-              ]
-            );
-            return;
-          }
-          // Actualizar estado de ambos servicios si el monitoreo se inicia exitosamente
-          setMonitoringStatus(prev => ({ 
-            ...prev, 
-            apps: true,
-            screenTime: true
-          }));
-          return;
-        } else {
-          AppMonitoringService.stopMonitoring();
-          setMonitoringStatus(prev => ({ 
-            ...prev, 
-            apps: false,
-            screenTime: false
-          }));
-          return;
-        }
-      
-      case 'notifications':
-        Alert.alert(
-          'Próximamente',
-          'El monitoreo de notificaciones estará disponible pronto.'
-        );
-        return;
-    }
-    
-    setMonitoringStatus(prev => ({ ...prev, [service]: newStatus }));
-  };
+    try {
+      const newStatus = !monitoringStatus[service];
 
+      switch (service) {
+        case 'location':
+          if (newStatus) {
+            const hasPermission =
+              await LocationService.checkLocationPermission();
+            if (hasPermission) {
+              await LocationService.startTracking();
+            } else {
+              const granted =
+                await LocationService.requestLocationPermissions();
+              if (granted) {
+                await LocationService.startTracking();
+              }
+            }
+          } else {
+            LocationService.stopTracking();
+          }
+          break;
+
+        case 'apps':
+          if (newStatus) {
+            
+            const monitoringSuccess =
+              await AppMonitoringService.startMonitoring({
+                enabled: true,
+                socialMediaLimit: childInfo?.socialMediaLimit || 60,
+                bedtimeStart: childInfo?.bedtime || '22:00',
+              });
+
+            if (!monitoringSuccess) {
+              Alert.alert(
+                'Error',
+                'No se pudo iniciar el monitoreo de aplicaciones',
+              );
+              return;
+            }
+          } else {
+            AppMonitoringService.stopMonitoring();
+          }
+          break;
+
+        case 'screenTime':
+          if (newStatus) {
+            const monitoringSuccess =
+              await AppMonitoringService.startMonitoring({
+                enabled: true,
+                socialMediaLimit: childInfo?.socialMediaLimit || 60,
+                bedtimeStart: childInfo?.bedtime || '22:00',
+              });
+
+            if (!monitoringSuccess) {
+              Alert.alert(
+                'Error',
+                'No se pudo iniciar el control de tiempo de pantalla',
+              );
+              return;
+            }
+          } else {
+            AppMonitoringService.stopMonitoring();
+          }
+          break;
+
+        case 'notifications':
+          // TODO: Implementar notificaciones en próximo sprint
+          Alert.alert(
+            'Próximamente',
+            'Esta funcionalidad estará disponible pronto',
+          );
+          return;
+
+        default:
+          return;
+      }
+
+      // Actualizar estado solo si todo salió bien
+      setMonitoringStatus(prev => ({
+        ...prev,
+        [service]: newStatus,
+      }));
+    } catch (error) {
+      console.error(`Error toggling ${service}:`, error);
+      Alert.alert('Error', `No se pudo cambiar el estado de ${service}`);
+    }
+  };
   const handleUnregister = () => {
     Alert.alert(
       'Desvincular Dispositivo',
@@ -292,9 +321,9 @@ const HomeScreen: React.FC = () => {
           style: 'destructive',
           onPress: async () => {
             await AuthService.unregisterDevice();
-          }
-        }
-      ]
+          },
+        },
+      ],
     );
   };
 
@@ -340,40 +369,49 @@ const HomeScreen: React.FC = () => {
           <Text style={styles.sectionTitle}>Estado del Monitoreo</Text>
           <View style={styles.statusGrid}>
             <View style={styles.statusIndicatorContainer}>
-              <View style={[
-                styles.statusIndicator,
-                monitoringStatus.location && styles.statusIndicatorActive
-              ]}>
+              <View
+                style={[
+                  styles.statusIndicator,
+                  monitoringStatus.location && styles.statusIndicatorActive,
+                ]}
+              >
                 <Text style={styles.statusIcon}>📍</Text>
               </View>
               <Text style={styles.statusLabel}>Ubicación</Text>
             </View>
-            
+
             <View style={styles.statusIndicatorContainer}>
-              <View style={[
-                styles.statusIndicator,
-                monitoringStatus.apps && styles.statusIndicatorActive
-              ]}>
+              <View
+                style={[
+                  styles.statusIndicator,
+                  monitoringStatus.apps && styles.statusIndicatorActive,
+                ]}
+              >
                 <Text style={styles.statusIcon}>📱</Text>
               </View>
               <Text style={styles.statusLabel}>Apps</Text>
             </View>
-            
+
             <View style={styles.statusIndicatorContainer}>
-              <View style={[
-                styles.statusIndicator,
-                monitoringStatus.screenTime && styles.statusIndicatorActive
-              ]}>
+              <View
+                style={[
+                  styles.statusIndicator,
+                  monitoringStatus.screenTime && styles.statusIndicatorActive,
+                ]}
+              >
                 <Text style={styles.statusIcon}>⏰</Text>
               </View>
               <Text style={styles.statusLabel}>Tiempo</Text>
             </View>
-            
+
             <View style={styles.statusIndicatorContainer}>
-              <View style={[
-                styles.statusIndicator,
-                monitoringStatus.notifications && styles.statusIndicatorActive
-              ]}>
+              <View
+                style={[
+                  styles.statusIndicator,
+                  monitoringStatus.notifications &&
+                    styles.statusIndicatorActive,
+                ]}
+              >
                 <Text style={styles.statusIcon}>🔔</Text>
               </View>
               <Text style={styles.statusLabel}>Alertas</Text>
@@ -387,68 +425,86 @@ const HomeScreen: React.FC = () => {
         {/* ✅ NUEVA SECCIÓN: Estadísticas de Uso de Hoy */}
         <View style={styles.usageStatsCard}>
           <Text style={styles.sectionTitle}>Uso de Hoy</Text>
-          
+
           <View style={styles.usageRow}>
             <Text style={styles.usageLabel}>Tiempo Total</Text>
-            <Text style={[
-              styles.usageValue,
-              { color: getScreenTimeColor(todayUsage.totalScreenTime, childInfo?.screenTimeLimit || 180) }
-            ]}>
-              {formatTime(todayUsage.totalScreenTime)} / {formatTime(childInfo?.screenTimeLimit || 180)}
+            <Text
+              style={[
+                styles.usageValue,
+                {
+                  color: getScreenTimeColor(
+                    todayUsage.totalScreenTime,
+                    childInfo?.screenTimeLimit || 180,
+                  ),
+                },
+              ]}
+            >
+              {formatTime(todayUsage.totalScreenTime)} /{' '}
+              {formatTime(childInfo?.screenTimeLimit || 180)}
             </Text>
           </View>
-          
+
           <View style={styles.usageRow}>
             <Text style={styles.usageLabel}>Apps Usadas</Text>
             <Text style={styles.usageValue}>{todayUsage.appsUsed}</Text>
           </View>
-          
+
           <View style={styles.usageRow}>
             <Text style={styles.usageLabel}>App Más Usada</Text>
             <Text style={styles.usageValue}>{todayUsage.mostUsedApp}</Text>
           </View>
-          
+
           <View style={styles.usageRow}>
             <Text style={styles.usageLabel}>Redes Sociales</Text>
-            <Text style={[
-              styles.usageValue,
-              { color: getScreenTimeColor(todayUsage.socialMediaTime, childInfo?.socialMediaLimit || 60) }
-            ]}>
-              {formatTime(todayUsage.socialMediaTime)} / {formatTime(childInfo?.socialMediaLimit || 60)}
+            <Text
+              style={[
+                styles.usageValue,
+                {
+                  color: getScreenTimeColor(
+                    todayUsage.socialMediaTime,
+                    childInfo?.socialMediaLimit || 60,
+                  ),
+                },
+              ]}
+            >
+              {formatTime(todayUsage.socialMediaTime)} /{' '}
+              {formatTime(childInfo?.socialMediaLimit || 60)}
             </Text>
           </View>
-          
+
           <View style={styles.usageRow}>
             <Text style={styles.usageLabel}>Juegos</Text>
-            <Text style={styles.usageValue}>{formatTime(todayUsage.gamesTime)}</Text>
+            <Text style={styles.usageValue}>
+              {formatTime(todayUsage.gamesTime)}
+            </Text>
           </View>
         </View>
 
         {/* Controles de Servicios */}
         <View style={styles.servicesCard}>
           <Text style={styles.sectionTitle}>Servicios de Monitoreo</Text>
-          
+
           <ServiceRow
             label="Seguimiento de Ubicación"
             description="Monitorea la ubicación GPS en tiempo real"
             enabled={monitoringStatus.location}
             onToggle={() => toggleMonitoring('location')}
           />
-          
+
           <ServiceRow
             label="Monitoreo de Aplicaciones"
             description="Controla qué aplicaciones se están usando"
             enabled={monitoringStatus.apps}
             onToggle={() => toggleMonitoring('apps')}
           />
-          
+
           <ServiceRow
             label="Control de Tiempo de Pantalla"
             description="Aplica límites de tiempo por aplicación"
             enabled={monitoringStatus.screenTime}
             onToggle={() => toggleMonitoring('screenTime')}
           />
-          
+
           <ServiceRow
             label="Alertas de Notificaciones"
             description="Monitorea notificaciones recibidas"
@@ -462,23 +518,23 @@ const HomeScreen: React.FC = () => {
         {childInfo && (
           <View style={styles.limitsCard}>
             <Text style={styles.sectionTitle}>Límites Configurados</Text>
-            <LimitRow 
-              label="Tiempo Total Diario" 
-              value={formatTime(childInfo.screenTimeLimit)} 
+            <LimitRow
+              label="Tiempo Total Diario"
+              value={formatTime(childInfo.screenTimeLimit)}
             />
-            <LimitRow 
-              label="Redes Sociales" 
-              value={formatTime(childInfo.socialMediaLimit)} 
+            <LimitRow
+              label="Redes Sociales"
+              value={formatTime(childInfo.socialMediaLimit)}
             />
-            <LimitRow 
-              label="Hora de Dormir" 
-              value={childInfo.bedtime} 
-            />
+            <LimitRow label="Hora de Dormir" value={childInfo.bedtime} />
           </View>
         )}
 
         {/* Botón de Desvincular */}
-        <TouchableOpacity style={styles.unlinkButton} onPress={handleUnregister}>
+        <TouchableOpacity
+          style={styles.unlinkButton}
+          onPress={handleUnregister}
+        >
           <Text style={styles.unlinkButtonText}>Desvincular Dispositivo</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -496,8 +552,12 @@ const ServiceRow: React.FC<{
 }> = ({ label, description, enabled, onToggle, disabled = false }) => (
   <View style={[styles.serviceRow, disabled && styles.serviceRowDisabled]}>
     <View style={styles.serviceInfo}>
-      <Text style={[styles.serviceLabel, disabled && styles.textDisabled]}>{label}</Text>
-      <Text style={[styles.serviceDescription, disabled && styles.textDisabled]}>
+      <Text style={[styles.serviceLabel, disabled && styles.textDisabled]}>
+        {label}
+      </Text>
+      <Text
+        style={[styles.serviceDescription, disabled && styles.textDisabled]}
+      >
         {description}
       </Text>
     </View>
@@ -511,7 +571,10 @@ const ServiceRow: React.FC<{
   </View>
 );
 
-const LimitRow: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+const LimitRow: React.FC<{ label: string; value: string }> = ({
+  label,
+  value,
+}) => (
   <View style={styles.limitRow}>
     <Text style={styles.limitLabel}>{label}</Text>
     <Text style={styles.limitValue}>{value}</Text>

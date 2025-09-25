@@ -1,7 +1,8 @@
-// mobile/src/services/AppMonitoringService.ts
+// mobile/src/services/AppMonitoringService.ts - VERSIÓN FINAL OPTIMIZADA
 import { NativeModules, Platform, Alert, Linking } from 'react-native';
 import { PermissionsAndroid } from 'react-native';
 import ApiService from './ApiService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface AppUsageData {
   packageName: string;
@@ -29,6 +30,15 @@ interface MonitoringConfig {
   bedtimeEnd: string; // HH:MM
 }
 
+interface UsageSummary {
+  totalScreenTime: number;
+  socialMediaTime: number; 
+  gamesTime: number;
+  educationalTime: number;
+  mostUsedApp: string;
+  appsCount: number;
+}
+
 class AppMonitoringService {
   private isMonitoring: boolean = false;
   private monitoringInterval: NodeJS.Timeout | null = null;
@@ -36,6 +46,7 @@ class AppMonitoringService {
   private appLimits: AppLimits = {};
   private currentUsageSession: Map<string, number> = new Map();
   private todayUsage: Map<string, number> = new Map();
+  private lastSyncTime: string | null = null;
 
   constructor() {
     this.config = {
@@ -48,7 +59,7 @@ class AppMonitoringService {
     };
   }
 
-  // Verificar si tenemos permisos de Usage Stats
+  // ✅ VERIFICACIÓN DE PERMISOS
   async checkUsageStatsPermission(): Promise<boolean> {
     if (Platform.OS !== 'android') {
       console.log('⚠️ App monitoring only supported on Android');
@@ -56,7 +67,6 @@ class AppMonitoringService {
     }
 
     try {
-      // Verificar si el módulo nativo está disponible
       if (!NativeModules.UsageStatsModule) {
         console.log('❌ UsageStatsModule not available');
         return false;
@@ -71,7 +81,6 @@ class AppMonitoringService {
     }
   }
 
-  // Solicitar permisos de Usage Stats
   async requestUsageStatsPermission(): Promise<boolean> {
     try {
       const hasPermission = await this.checkUsageStatsPermission();
@@ -80,7 +89,6 @@ class AppMonitoringService {
         return true;
       }
 
-      // Mostrar diálogo explicativo
       return new Promise((resolve) => {
         Alert.alert(
           'Permisos Necesarios',
@@ -104,7 +112,6 @@ class AppMonitoringService {
                     await NativeModules.UsageStatsModule.requestUsageStatsPermission();
                   }
                   
-                  // Verificar nuevamente después de un breve delay
                   setTimeout(async () => {
                     const granted = await this.checkUsageStatsPermission();
                     resolve(granted);
@@ -124,7 +131,7 @@ class AppMonitoringService {
     }
   }
 
-  // Obtener estadísticas de uso de aplicaciones
+  // ✅ OBTENCIÓN DE DATOS DE USO
   async getUsageStats(startTime?: number, endTime?: number): Promise<AppUsageData[]> {
     try {
       if (!await this.checkUsageStatsPermission()) {
@@ -132,12 +139,11 @@ class AppMonitoringService {
       }
 
       const now = Date.now();
-      const start = startTime || (now - 24 * 60 * 60 * 1000); // Últimas 24 horas por defecto
+      const start = startTime || (now - 24 * 60 * 60 * 1000);
       const end = endTime || now;
 
       const usageStats = await NativeModules.UsageStatsModule.getUsageStats(start, end);
       
-      // Filtrar y procesar datos
       const processedStats: AppUsageData[] = usageStats
         .filter((app: any) => app.totalTimeForeground > 0)
         .map((app: any) => ({
@@ -148,7 +154,7 @@ class AppMonitoringService {
           lastTimeStamp: app.lastTimeStamp,
           totalTimeForeground: app.totalTimeForeground
         }))
-        .sort((a, b) => b.usageTime - a.usageTime); // Ordenar por tiempo de uso
+        .sort((a, b) => b.usageTime - a.usageTime);
 
       console.log(`📊 Obtained usage stats for ${processedStats.length} apps`);
       return processedStats;
@@ -158,7 +164,87 @@ class AppMonitoringService {
     }
   }
 
-  // Obtener la aplicación actualmente en primer plano
+  // ✅ WRAPPER PARA ESTADÍSTICAS DE HOY (requerido por HomeScreen)
+  async getTodayUsageStats(): Promise<AppUsageData[]> {
+    const now = Date.now();
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    return await this.getUsageStats(startOfDay.getTime(), now);
+  }
+
+  // ✅ ANÁLISIS Y CATEGORIZACIÓN DE DATOS (requerido por HomeScreen)
+  analyzeUsageData(stats: AppUsageData[]): UsageSummary {
+    let totalScreenTime = 0;
+    let socialMediaTime = 0;
+    let gamesTime = 0;
+    let educationalTime = 0;
+    let mostUsedApp = 'Ninguna';
+    let maxUsageTime = 0;
+
+    stats.forEach(stat => {
+      const timeInMinutes = Math.round(stat.usageTime / (1000 * 60));
+      totalScreenTime += timeInMinutes;
+
+      if (stat.usageTime > maxUsageTime) {
+        maxUsageTime = stat.usageTime;
+        mostUsedApp = stat.appName;
+      }
+
+      const category = this.categorizeApp(stat.packageName);
+      switch (category) {
+        case 'social':
+          socialMediaTime += timeInMinutes;
+          break;
+        case 'games':
+          gamesTime += timeInMinutes;
+          break;
+        case 'educational':
+          educationalTime += timeInMinutes;
+          break;
+      }
+    });
+
+    return {
+      totalScreenTime,
+      socialMediaTime,
+      gamesTime, 
+      educationalTime,
+      mostUsedApp,
+      appsCount: stats.length
+    };
+  }
+
+  private categorizeApp(packageName: string): string {
+    const categories: { [key: string]: string[] } = {
+      social: [
+        'com.whatsapp', 'com.instagram.android', 'com.facebook.katana',
+        'com.twitter.android', 'com.snapchat.android', 'com.zhiliaoapp.musically',
+        'com.discord', 'org.telegram.messenger'
+      ],
+      games: [
+        'com.mojang.minecraftpe', 'com.roblox.client', 'com.supercell.clashofclans',
+        'com.king.candycrushsaga', 'com.tencent.ig', 'com.epicgames.fortnite'
+      ],
+      educational: [
+        'com.duolingo', 'org.khanacademy.android', 'com.google.android.apps.classroom',
+        'com.google.android.apps.docs'
+      ],
+      entertainment: [
+        'com.netflix.mediaclient', 'com.google.android.youtube', 'com.spotify.music'
+      ]
+    };
+
+    for (const [category, apps] of Object.entries(categories)) {
+      if (apps.includes(packageName)) {
+        return category;
+      }
+    }
+
+    return 'other';
+  }
+
+  // ✅ APP EN PRIMER PLANO
   async getCurrentForegroundApp(): Promise<string | null> {
     try {
       if (!await this.checkUsageStatsPermission()) {
@@ -173,15 +259,14 @@ class AppMonitoringService {
     }
   }
 
-  // Iniciar monitoreo de aplicaciones
-  async startMonitoring(): Promise<boolean> {
+  // ✅ CONTROL DE MONITOREO
+  async startMonitoring(customConfig?: Partial<MonitoringConfig>): Promise<boolean> {
     try {
       if (this.isMonitoring) {
         console.log('📱 App monitoring already active');
         return true;
       }
 
-      // Verificar permisos
       const hasPermission = await this.checkUsageStatsPermission();
       if (!hasPermission) {
         const granted = await this.requestUsageStatsPermission();
@@ -192,6 +277,12 @@ class AppMonitoringService {
       }
 
       console.log('🚀 Starting app monitoring...');
+      
+      // Aplicar configuración personalizada si se proporciona
+      if (customConfig) {
+        this.config = { ...this.config, ...customConfig };
+      }
+      
       this.isMonitoring = true;
 
       // Cargar configuración desde el backend
@@ -202,6 +293,9 @@ class AppMonitoringService {
         this.performMonitoringCheck();
       }, this.config.updateInterval);
 
+      // Guardar estado
+      await AsyncStorage.setItem('monitoringActive', 'true');
+
       console.log('✅ App monitoring started');
       return true;
     } catch (error) {
@@ -211,7 +305,6 @@ class AppMonitoringService {
     }
   }
 
-  // Detener monitoreo
   stopMonitoring(): void {
     if (this.monitoringInterval) {
       clearInterval(this.monitoringInterval);
@@ -221,31 +314,26 @@ class AppMonitoringService {
     this.isMonitoring = false;
     this.currentUsageSession.clear();
     
+    AsyncStorage.setItem('monitoringActive', 'false');
     console.log('⏹️ App monitoring stopped');
   }
 
-  // Realizar verificación de monitoreo
+  // ✅ VERIFICACIÓN PERIÓDICA DE MONITOREO
   private async performMonitoringCheck(): Promise<void> {
     try {
       if (!this.config.enabled) {
         return;
       }
 
-      // Obtener app actual
       const currentApp = await this.getCurrentForegroundApp();
       
       if (currentApp) {
-        // Verificar límites de tiempo
         await this.checkAppLimits(currentApp);
-        
-        // Verificar hora de dormir
         await this.checkBedtime(currentApp);
-        
-        // Actualizar sesión de uso
         this.updateUsageSession(currentApp);
       }
 
-      // Enviar datos de uso al backend cada 5 minutos
+      // Sincronización periódica cada 5 minutos
       if (Date.now() % 300000 < this.config.updateInterval) {
         await this.sendUsageDataToBackend();
       }
@@ -254,7 +342,7 @@ class AppMonitoringService {
     }
   }
 
-  // Verificar límites de aplicación
+  // ✅ VERIFICACIONES DE LÍMITES Y BEDTIME
   private async checkAppLimits(packageName: string): Promise<void> {
     const limits = this.appLimits[packageName];
     
@@ -266,13 +354,10 @@ class AppMonitoringService {
     const todayUsageMinutes = todayUsageMs / (1000 * 60);
 
     if (todayUsageMinutes >= limits.dailyLimit) {
-      // Límite excedido
       console.log(`⏰ Daily limit exceeded for ${packageName}: ${todayUsageMinutes}/${limits.dailyLimit} minutes`);
       
-      // Enviar alerta al backend
       await this.sendAppLimitAlert(packageName, todayUsageMinutes, limits.dailyLimit);
       
-      // Mostrar notificación local
       Alert.alert(
         'Límite de Tiempo Alcanzado',
         `Has alcanzado el límite diario para esta aplicación (${limits.dailyLimit} minutos).`,
@@ -281,7 +366,6 @@ class AppMonitoringService {
     }
   }
 
-  // Verificar hora de dormir
   private async checkBedtime(packageName: string): Promise<void> {
     const now = new Date();
     const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
@@ -290,8 +374,6 @@ class AppMonitoringService {
     
     if (isInBedtime) {
       console.log(`🌙 Bedtime mode active, app: ${packageName}`);
-      
-      // Enviar alerta de hora de dormir
       await this.sendBedtimeAlert(packageName);
       
       Alert.alert(
@@ -302,41 +384,37 @@ class AppMonitoringService {
     }
   }
 
-  // Verificar si una hora está entre dos rangos
+  // ✅ UTILIDADES DE TIEMPO
   private isTimeBetween(current: string, start: string, end: string): boolean {
     const currentMinutes = this.timeToMinutes(current);
     const startMinutes = this.timeToMinutes(start);
     const endMinutes = this.timeToMinutes(end);
 
     if (startMinutes <= endMinutes) {
-      // No cruza medianoche
       return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
     } else {
-      // Cruza medianoche
       return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
     }
   }
 
-  // Convertir tiempo HH:MM a minutos
   private timeToMinutes(time: string): number {
     const [hours, minutes] = time.split(':').map(Number);
     return hours * 60 + minutes;
   }
 
-  // Actualizar sesión de uso
+  // ✅ GESTIÓN DE SESIONES DE USO
   private updateUsageSession(packageName: string): void {
     const now = Date.now();
     const lastUpdate = this.currentUsageSession.get(packageName) || now;
     const sessionTime = now - lastUpdate;
 
-    // Actualizar uso de hoy
     const currentTodayUsage = this.todayUsage.get(packageName) || 0;
     this.todayUsage.set(packageName, currentTodayUsage + sessionTime);
     
     this.currentUsageSession.set(packageName, now);
   }
 
-  // Cargar configuración desde el backend
+  // ✅ CONFIGURACIÓN DESDE BACKEND
   private async loadConfiguration(): Promise<void> {
     try {
       const response = await ApiService.get('/api/monitoring/config');
@@ -352,7 +430,7 @@ class AppMonitoringService {
     }
   }
 
-  // Enviar datos de uso al backend
+  // ✅ SINCRONIZACIÓN CON BACKEND
   private async sendUsageDataToBackend(): Promise<void> {
     try {
       const usageStats = await this.getUsageStats();
@@ -361,8 +439,14 @@ class AppMonitoringService {
         return;
       }
 
+      const childId = ApiService.getChildId();
+      if (!childId) {
+        throw new Error('Child ID not available');
+      }
+
       const payload = {
         timestamp: Date.now(),
+        child_id: childId,
         usageData: usageStats,
         todayUsage: Object.fromEntries(this.todayUsage),
         device_info: {
@@ -372,13 +456,24 @@ class AppMonitoringService {
       };
 
       await ApiService.post('/api/monitoring/usage-stats', payload);
+      
+      // Guardar timestamp de última sincronización
+      this.lastSyncTime = new Date().toISOString();
+      await AsyncStorage.setItem('lastUsageSync', this.lastSyncTime);
+      
       console.log('📤 Usage stats sent to backend');
     } catch (error) {
       console.error('Error sending usage stats:', error);
+      throw error;
     }
   }
 
-  // Enviar alerta de límite de aplicación
+  // ✅ ALIAS PARA SINCRONIZACIÓN MANUAL (requerido por HomeScreen)
+  async syncUsageStatsWithBackend(): Promise<void> {
+    return await this.sendUsageDataToBackend();
+  }
+
+  // ✅ SISTEMA DE ALERTAS
   private async sendAppLimitAlert(packageName: string, usedMinutes: number, limitMinutes: number): Promise<void> {
     try {
       await ApiService.post('/api/alerts', {
@@ -397,7 +492,6 @@ class AppMonitoringService {
     }
   }
 
-  // Enviar alerta de hora de dormir
   private async sendBedtimeAlert(packageName: string): Promise<void> {
     try {
       await ApiService.post('/api/alerts', {
@@ -416,7 +510,7 @@ class AppMonitoringService {
     }
   }
 
-  // Obtener nivel de batería
+  // ✅ UTILIDADES
   private async getBatteryLevel(): Promise<number> {
     try {
       const DeviceInfo = require('react-native-device-info');
@@ -427,7 +521,7 @@ class AppMonitoringService {
     }
   }
 
-  // Métodos públicos para obtener estado
+  // ✅ MÉTODOS PÚBLICOS PARA OBTENER ESTADO (requeridos por HomeScreen)
   isMonitoringActive(): boolean {
     return this.isMonitoring;
   }
@@ -440,7 +534,14 @@ class AppMonitoringService {
     return new Map(this.todayUsage);
   }
 
-  // Actualizar configuración
+  async getLastSyncTime(): Promise<string | null> {
+    if (!this.lastSyncTime) {
+      this.lastSyncTime = await AsyncStorage.getItem('lastUsageSync');
+    }
+    return this.lastSyncTime;
+  }
+
+  // ✅ ACTUALIZACIÓN DE CONFIGURACIÓN
   async updateConfiguration(newConfig: Partial<MonitoringConfig>): Promise<void> {
     this.config = { ...this.config, ...newConfig };
     
